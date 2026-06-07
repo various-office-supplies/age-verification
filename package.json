@@ -23,10 +23,8 @@
   },
   "homepage": "https://github.com/various-office-supplies/age-verification#readme",
   "dependencies": {
-    "@cloudflare/blindrsa-ts": "^0.4.4",
-    "@noble/ed25519": "^3.1.0",
-    "@noble/hashes": "^2.2.0",
-    "@semaphore-protocol/core": "^4.14.2"
+    "@docknetwork/crypto-wasm-ts": "^0.67.0",
+    "@noble/hashes": "^2.2.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

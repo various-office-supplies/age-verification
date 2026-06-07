@@ -3,11 +3,17 @@ export { User } from "./protocol/user.js"
 export { Website } from "./protocol/website.js"
 
 export type {
-  AnonymousCredential,
-  ApprovedEnrollment,
+  ConvertibleInvalidIdAccumulator,
+  EncryptedPackage,
   GovPublicKeys,
-  SignedRegistrySnapshot,
+  GovStatePackage,
+  InvalidIdAccumulator,
+  IssuedCredential,
+  PublicCredentialRequest,
+  StoredCredential,
+  UserWalletPackage,
   VerificationResult,
   WebsiteChallenge,
+  WebsiteNullifierPackage,
   WebsiteProof
 } from "./protocol/types.js"

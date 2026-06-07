@@ -1,129 +1,129 @@
 import {
-  compute_registry_root,
-  create_enrollment_key_pair,
-  create_registry_key_pair,
-  get_blind_suite,
-  hash_bytes_to_hex,
-  sign_snapshot,
-  to_hex
-} from "./crypto.js"
+  add_invalid_credential_id,
+  create_gov_key_material,
+  create_invalid_id_accumulator,
+  create_issued_credential,
+  create_revocation_witness,
+  get_credential_public_key_hex,
+  get_revocation_public_key_hex
+} from "./anonymous-credential.js"
+import {
+  accumulator_with_conversions,
+  encrypt_package,
+  encrypted_csv,
+  encrypted_json,
+  gov_state_to_package,
+  load_encrypted,
+  save_encrypted
+} from "./convert.js"
 import type {
-  AnonymousCredential,
-  ApprovedEnrollment,
+  ConvertibleInvalidIdAccumulator,
+  EncryptedPackage,
   GovPublicKeys,
+  GovStatePackage,
   GovState,
-  RegistrySnapshot,
-  SignedRegistrySnapshot
+  IssuedCredential,
+  PublicCredentialRequest
 } from "./types.js"
 
 export class Gov {
-  private readonly state: GovState
+  private state: GovState
+  private readonly password: string
 
-  private constructor(state: GovState) {
+  private constructor(state: GovState, password: string) {
     this.state = state
+    this.password = password
   }
 
-  static async create(): Promise<Gov> {
-    const registry_keys = await create_registry_key_pair()
+  static async create(password: string): Promise<Gov> {
+    return new Gov(await Gov.create_state(password), password)
+  }
 
-    return new Gov({
-      commitments: new Set(),
-      enrollmentKeys: await create_enrollment_key_pair(),
-      redeemedTicketHashes: new Set(),
-      registryPrivateKey: registry_keys.private_key,
-      registryPublicKey: registry_keys.public_key,
-      revokedCommitments: new Set(),
-      sequence: 0,
-      signedBlindTicketHashes: []
-    })
+  csv(): string {
+    return encrypted_csv("gov-state", this.password, this.unencrypted_state_package())
+  }
+
+  json(): string {
+    return encrypted_json("gov-state", this.password, this.unencrypted_state_package())
+  }
+
+  async load(source: string): Promise<void> {
+    const state_package = await load_encrypted<GovStatePackage>(
+      source,
+      "gov-state",
+      this.password
+    )
+    this.state = await Gov.create_state(this.password, state_package)
+  }
+
+  async save(file_path: string): Promise<void> {
+    await save_encrypted(
+      file_path,
+      "gov-state",
+      this.password,
+      this.unencrypted_state_package()
+    )
+  }
+
+  state_package(): EncryptedPackage {
+    return encrypt_package("gov-state", this.password, this.unencrypted_state_package())
+  }
+
+  unencrypted_state_package(): GovStatePackage {
+    return gov_state_to_package(
+      Array.from(this.state.invalidCredentialIds),
+      this.state.sequence,
+      create_invalid_id_accumulator(this.state.keyMaterial, this.state.sequence)
+    )
   }
 
   get_public_keys(): GovPublicKeys {
     return {
-      enrollmentPublicKey: this.state.enrollmentKeys.publicKey,
-      registryPublicKeyHex: to_hex(this.state.registryPublicKey)
+      credentialPublicKeyHex: get_credential_public_key_hex(this.state.keyMaterial),
+      revocationPublicKeyHex: get_revocation_public_key_hex(this.state.keyMaterial)
     }
   }
 
-  async sign_blinded_ticket(blinded_ticket: Uint8Array): Promise<ApprovedEnrollment> {
-    const suite = get_blind_suite()
-    const blind_signature = await suite.blindSign(
-      this.state.enrollmentKeys.privateKey,
-      blinded_ticket
-    )
-
-    this.state.signedBlindTicketHashes.push(
-      hash_bytes_to_hex("signed-blinded-ticket", blinded_ticket)
-    )
-
-    return { blindSignature: blind_signature }
+  issue_credential(request: PublicCredentialRequest): IssuedCredential {
+    return create_issued_credential(request, this.state.keyMaterial)
   }
 
-  async redeem_credential(credential: AnonymousCredential, commitment: string): Promise<boolean> {
-    const ticket_hash = hash_bytes_to_hex("redeemed-ticket", credential.preparedTicket)
-    const verified = await this.verify_credential(credential)
+  async create_revocation_witness(credential_id_hex: string): Promise<string> {
+    return create_revocation_witness(credential_id_hex, this.state.keyMaterial)
+  }
 
-    if (!verified || this.state.redeemedTicketHashes.has(ticket_hash)) {
+  async nullify_credential(credential_id_hex: string): Promise<boolean> {
+    if (this.state.invalidCredentialIds.has(credential_id_hex)) {
       return false
     }
 
-    if (this.state.commitments.has(commitment)) {
-      return false
-    }
-
-    this.state.redeemedTicketHashes.add(ticket_hash)
-    this.state.commitments.add(commitment)
+    await add_invalid_credential_id(credential_id_hex, this.state.keyMaterial)
+    this.state.invalidCredentialIds.add(credential_id_hex)
     return true
   }
 
-  nullify_commitment(commitment: string): boolean {
-    const removed = this.state.commitments.delete(commitment)
-
-    if (removed) {
-      this.state.revokedCommitments.add(commitment)
-    }
-
-    return removed
-  }
-
-  async publish_registry_snapshot(): Promise<SignedRegistrySnapshot> {
+  publish_invalid_id_accumulator(): ConvertibleInvalidIdAccumulator {
     this.state.sequence += 1
-
-    const snapshot = this.create_snapshot()
-    const signature_hex = await sign_snapshot(snapshot, this.state.registryPrivateKey)
-
-    return {
-      publicKeyHex: to_hex(this.state.registryPublicKey),
-      signatureHex: signature_hex,
-      snapshot
-    }
-  }
-
-  get_blind_enrollment_audit_trail() {
-    return {
-      redeemedTicketHashes: Array.from(this.state.redeemedTicketHashes),
-      signedBlindTicketHashes: [...this.state.signedBlindTicketHashes]
-    }
-  }
-
-  private create_snapshot(): RegistrySnapshot {
-    const commitments = Array.from(this.state.commitments)
-
-    return {
-      commitments,
-      issuedAt: new Date().toISOString(),
-      registryRoot: compute_registry_root(commitments),
-      revokedCommitments: Array.from(this.state.revokedCommitments),
-      sequence: this.state.sequence
-    }
-  }
-
-  private async verify_credential(credential: AnonymousCredential): Promise<boolean> {
-    const suite = get_blind_suite()
-    return suite.verify(
-      this.state.enrollmentKeys.publicKey,
-      credential.ticketSignature,
-      credential.preparedTicket
+    return accumulator_with_conversions(
+      create_invalid_id_accumulator(this.state.keyMaterial, this.state.sequence)
     )
+  }
+
+  private static async create_state(
+    password: string,
+    state_package?: GovStatePackage
+  ): Promise<GovState> {
+    const key_material = await create_gov_key_material(password)
+    const invalid_credential_ids = new Set(state_package?.invalidCredentialIds ?? [])
+
+    for (const credential_id_hex of invalid_credential_ids) {
+      await add_invalid_credential_id(credential_id_hex, key_material)
+    }
+
+    return {
+      invalidCredentialIds: invalid_credential_ids,
+      keyMaterial: key_material,
+      sequence: state_package?.sequence ?? 0
+    }
   }
 }

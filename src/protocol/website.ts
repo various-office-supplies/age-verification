@@ -1,123 +1,121 @@
-import { verifyProof } from "@semaphore-protocol/proof"
-
-import { hash_text_to_field, random_hex, verify_registry_snapshot } from "./crypto.js"
+import { verify_website_proof } from "./anonymous-credential.js"
+import {
+  load_website,
+  save_website,
+  website_csv,
+  website_json
+} from "./convert.js"
+import { random_hex } from "./crypto.js"
 import type {
   HexString,
-  SignedRegistrySnapshot,
+  InvalidIdAccumulator,
   VerificationResult,
   WebsiteChallenge,
+  WebsiteNullifierPackage,
   WebsiteProof
 } from "./types.js"
 
 type WebsiteOptions = {
+  acceptedNullifiers?: string[]
   siteOrigin: string
-  trustedRegistryPublicKeyHex: HexString
+  trustedGovPublicKeyHex: HexString
 }
 
 export class Website {
-  private cached_snapshot: SignedRegistrySnapshot | null = null
-  private readonly accepted_nullifiers = new Set<string>()
+  private readonly accepted_nullifiers: Set<string>
   private readonly site_origin: string
-  private readonly trusted_registry_public_key_hex: HexString
+  private readonly trusted_gov_public_key_hex: HexString
 
   private constructor(options: WebsiteOptions) {
+    this.accepted_nullifiers = new Set(options.acceptedNullifiers ?? [])
     this.site_origin = options.siteOrigin
-    this.trusted_registry_public_key_hex = options.trustedRegistryPublicKeyHex
+    this.trusted_gov_public_key_hex = options.trustedGovPublicKeyHex
   }
 
   static create(options: WebsiteOptions): Website {
     return new Website(options)
   }
 
-  async download_registry_snapshot(snapshot: SignedRegistrySnapshot): Promise<boolean> {
-    const valid = await verify_registry_snapshot(snapshot, this.trusted_registry_public_key_hex)
+  csv(): string {
+    return website_csv(this.export_nullifier_package())
+  }
 
-    if (valid) {
-      this.cached_snapshot = snapshot
+  json(): string {
+    return website_json(this.export_nullifier_package())
+  }
+
+  async load(source: string): Promise<void> {
+    const nullifier_package = await load_website(source)
+
+    if (nullifier_package.siteOrigin && nullifier_package.siteOrigin !== this.site_origin) {
+      throw new Error("nullifier data belongs to a different website")
     }
 
-    return valid
+    this.accepted_nullifiers.clear()
+
+    for (const nullifier of nullifier_package.nullifiers) {
+      this.accepted_nullifiers.add(nullifier)
+    }
+  }
+
+  async save(file_path: string): Promise<void> {
+    await save_website(file_path, this.export_nullifier_package())
+  }
+
+  export_nullifier_package(): WebsiteNullifierPackage {
+    return {
+      nullifiers: Array.from(this.accepted_nullifiers),
+      siteOrigin: this.site_origin
+    }
   }
 
   create_challenge(): WebsiteChallenge {
-    const challenge_id = random_hex(16)
-
     return {
-      challengeId: challenge_id,
-      message: hash_text_to_field("challenge-message", `${this.site_origin}:${challenge_id}`),
-      scope: hash_text_to_field("site-scope", this.site_origin),
+      challengeId: random_hex(16),
       siteOrigin: this.site_origin
     }
   }
 
   async verify_proof(
     challenge: WebsiteChallenge,
-    website_proof: WebsiteProof
+    website_proof: WebsiteProof,
+    accumulator: InvalidIdAccumulator
   ): Promise<VerificationResult> {
-    const basic_error = await this.find_basic_error(challenge, website_proof)
+    const basic_error = this.find_basic_error(challenge, website_proof, accumulator)
 
     if (basic_error) {
       return reject(basic_error)
     }
 
-    const nullifier = website_proof.proof.nullifier
+    const nullifier = website_proof.nullifierHex
 
     if (this.accepted_nullifiers.has(nullifier)) {
       return reject("same site nullifier was already accepted")
     }
 
     this.accepted_nullifiers.add(nullifier)
-    return { accepted: true, reason: "valid anonymous ID proof" }
+    return { accepted: true, reason: "valid anonymous gov credential proof" }
   }
 
-  get_cached_snapshot(): SignedRegistrySnapshot | null {
-    return this.cached_snapshot
-  }
-
-  private async find_basic_error(
+  private find_basic_error(
     challenge: WebsiteChallenge,
-    website_proof: WebsiteProof
-  ): Promise<string | null> {
-    if (!this.cached_snapshot) {
-      return "no registry snapshot has been downloaded"
-    }
-
+    website_proof: WebsiteProof,
+    accumulator: InvalidIdAccumulator
+  ): string | null {
     if (challenge.siteOrigin !== this.site_origin || website_proof.siteOrigin !== this.site_origin) {
       return "proof was made for a different website"
     }
 
-    const snapshot_valid = await verify_registry_snapshot(
-      this.cached_snapshot,
-      this.trusted_registry_public_key_hex
-    )
-
-    if (!snapshot_valid) {
-      return "cached government registry snapshot is invalid"
+    if (!verify_website_proof(
+      website_proof,
+      challenge,
+      accumulator,
+      this.trusted_gov_public_key_hex
+    )) {
+      return "anonymous credential proof is invalid or revoked"
     }
 
-    return this.verify_proof_fields(challenge, website_proof)
-  }
-
-  private async verify_proof_fields(
-    challenge: WebsiteChallenge,
-    website_proof: WebsiteProof
-  ): Promise<string | null> {
-    const snapshot = this.cached_snapshot
-    const proof = website_proof.proof
-
-    if (!snapshot) {
-      return "no registry snapshot has been downloaded"
-    }
-
-    if (proof.merkleTreeRoot !== snapshot.snapshot.registryRoot) {
-      return "proof was made against an old or unknown registry"
-    }
-
-    if (proof.message !== challenge.message.toString() || proof.scope !== challenge.scope.toString()) {
-      return "proof does not match the website challenge"
-    }
-
-    return (await verifyProof(proof)) ? null : "zero-knowledge proof is invalid"
+    return null
   }
 }
 

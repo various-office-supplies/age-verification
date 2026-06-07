@@ -1,50 +1,75 @@
-import type { Identity } from "@semaphore-protocol/identity"
+import type {
+  AccumulatorParams,
+  AccumulatorPublicKey,
+  AccumulatorSecretKey,
+  BBSPlusPublicKeyG2,
+  BBSPlusSecretKey,
+  BBSPlusSignatureParamsG1,
+  UniversalAccumulator
+} from "@docknetwork/crypto-wasm-ts"
+
+import type { InMemoryAccumulatorState } from "./anonymous-credential.js"
 
 export type HexString = string
 
-export type SemaphoreProof = {
-  merkleTreeDepth: number
-  merkleTreeRoot: string
-  message: string
-  nullifier: string
-  points: unknown
-  scope: string
-}
-
 export type GovPublicKeys = {
-  enrollmentPublicKey: CryptoKey
-  registryPublicKeyHex: HexString
+  credentialPublicKeyHex: HexString
+  revocationPublicKeyHex: HexString
 }
 
-export type AnonymousCredential = {
-  preparedTicket: Uint8Array
-  ticketSignature: Uint8Array
+export type PublicCredentialRequest = {
+  blindedIndices: number[]
+  commitmentHex: HexString
 }
 
-export type RegistrySnapshot = {
-  commitments: string[]
-  issuedAt: string
-  registryRoot: string
-  revokedCommitments: string[]
-  sequence: number
+export type CredentialRequest = PublicCredentialRequest & {
+  blindingHex: HexString
 }
 
-export type SignedRegistrySnapshot = {
-  publicKeyHex: HexString
+export type EncryptedPackage = {
+  algorithm: "aes-256-gcm"
+  ciphertextHex: HexString
+  format: "csv" | "json"
+  ivHex: HexString
+  kind: string
+  saltHex: HexString
+  tagHex: HexString
+  version: 1
+}
+
+export type IssuedCredential = {
+  blindSignatureHex: HexString
+  credentialIdHex: HexString
+}
+
+export type StoredCredential = {
+  credentialIdHex: HexString
   signatureHex: HexString
-  snapshot: RegistrySnapshot
+  userSecretHex: HexString
 }
 
 export type WebsiteChallenge = {
   challengeId: string
-  message: bigint
-  scope: bigint
   siteOrigin: string
 }
 
 export type WebsiteProof = {
-  proof: SemaphoreProof
+  nullifierHex: HexString
+  proofHex: HexString
   siteOrigin: string
+}
+
+export type InvalidIdAccumulator = {
+  accumulatedHex: HexString
+  issuedAt: string
+  publicKeyHex: HexString
+  sequence: number
+}
+
+export type ConvertibleInvalidIdAccumulator = InvalidIdAccumulator & {
+  csv(): string
+  json(): string
+  save(file_path: string): Promise<void>
 }
 
 export type VerificationResult = {
@@ -52,29 +77,43 @@ export type VerificationResult = {
   reason: string
 }
 
-export type EnrollmentRequest = {
-  blindedTicket: Uint8Array
-  inverse: Uint8Array
-  preparedTicket: Uint8Array
+export type GovStatePackage = {
+  accumulator: InvalidIdAccumulator
+  invalidCredentialIds: HexString[]
+  sequence: number
 }
 
-export type ApprovedEnrollment = {
-  blindSignature: Uint8Array
+export type UserWalletPackage = {
+  credential: StoredCredential | null
+  credentialRequest: CredentialRequest | null
+  revocationWitnessJson: string | null
 }
 
-export type UserWallet = {
-  identity: Identity
-  passwordSaltHex: HexString
-  commitment: bigint
+export type WebsiteNullifierPackage = {
+  nullifiers: HexString[]
+  siteOrigin: string
+}
+
+export type GovKeyMaterial = {
+  credentialParams: BBSPlusSignatureParamsG1
+  credentialPublicKey: BBSPlusPublicKeyG2
+  credentialSecretKey: BBSPlusSecretKey
+  revocationAccumulator: UniversalAccumulator
+  revocationParams: AccumulatorParams
+  revocationPublicKey: AccumulatorPublicKey
+  revocationSecretKey: AccumulatorSecretKey
+  revocationState: InMemoryAccumulatorState
 }
 
 export type GovState = {
-  commitments: Set<string>
-  enrollmentKeys: CryptoKeyPair
-  redeemedTicketHashes: Set<string>
-  registryPrivateKey: Uint8Array
-  registryPublicKey: Uint8Array
-  revokedCommitments: Set<string>
+  invalidCredentialIds: Set<string>
+  keyMaterial: GovKeyMaterial
   sequence: number
-  signedBlindTicketHashes: string[]
+}
+
+export type UserWallet = {
+  credential: StoredCredential | null
+  credentialRequest: CredentialRequest | null
+  password: string
+  revocationWitnessJson: string | null
 }
