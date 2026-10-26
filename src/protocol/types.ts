@@ -24,17 +24,7 @@ export type PublicCredentialRequest = {
 
 export type CredentialRequest = PublicCredentialRequest & {
   blindingHex: HexString
-}
-
-export type EncryptedPackage = {
-  algorithm: "aes-256-gcm"
-  ciphertextHex: HexString
-  format: "csv" | "json"
-  ivHex: HexString
-  kind: string
-  saltHex: HexString
-  tagHex: HexString
-  version: 1
+  userSecretHex: HexString
 }
 
 export type IssuedCredential = {
@@ -66,32 +56,20 @@ export type InvalidIdAccumulator = {
   sequence: number
 }
 
-export type ConvertibleInvalidIdAccumulator = InvalidIdAccumulator & {
-  csv(): string
-  json(): string
-  save(file_path: string): Promise<void>
-}
+export type VerificationResult =
+  | { accepted: true; nullifierHex: HexString }
+  | { accepted: false; reason: string }
 
-export type VerificationResult = {
-  accepted: boolean
-  reason: string
-}
-
-export type GovStatePackage = {
-  accumulator: InvalidIdAccumulator
+export type GovExport = {
   invalidCredentialIds: HexString[]
+  secret: string
   sequence: number
 }
 
-export type UserWalletPackage = {
+export type UserState = {
   credential: StoredCredential | null
   credentialRequest: CredentialRequest | null
   revocationWitnessJson: string | null
-}
-
-export type WebsiteNullifierPackage = {
-  nullifiers: HexString[]
-  siteOrigin: string
 }
 
 export type GovKeyMaterial = {
@@ -108,12 +86,6 @@ export type GovKeyMaterial = {
 export type GovState = {
   invalidCredentialIds: Set<string>
   keyMaterial: GovKeyMaterial
+  secret: string
   sequence: number
-}
-
-export type UserWallet = {
-  credential: StoredCredential | null
-  credentialRequest: CredentialRequest | null
-  password: string
-  revocationWitnessJson: string | null
 }

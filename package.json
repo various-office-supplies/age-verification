@@ -9,6 +9,10 @@
   },
   "scripts": {
     "demo": "tsx age-verification-demo.ts",
+    "demo:build": "esbuild demo/app.ts --bundle --format=iife --platform=browser --target=es2022 --inject:demo/buffer-shim.js --outfile=demo/app.js",
+    "demo:test": "tsx demo/flow-test.ts",
+    "demo:web": "npm run demo:build && node demo/serve.mjs",
+    "test": "tsx age-verification-test.ts && npm run demo:test",
     "typecheck": "tsc --noEmit"
   },
   "repository": {
@@ -28,6 +32,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
+    "esbuild": "^0.28.0",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   }

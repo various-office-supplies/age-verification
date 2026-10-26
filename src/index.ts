@@ -1,19 +1,17 @@
 export { Gov } from "./protocol/gov.js"
 export { User } from "./protocol/user.js"
 export { Website } from "./protocol/website.js"
+export { initialize } from "./protocol/anonymous-credential.js"
 
 export type {
-  ConvertibleInvalidIdAccumulator,
-  EncryptedPackage,
+  GovExport,
   GovPublicKeys,
-  GovStatePackage,
   InvalidIdAccumulator,
   IssuedCredential,
   PublicCredentialRequest,
   StoredCredential,
-  UserWalletPackage,
+  UserState,
   VerificationResult,
   WebsiteChallenge,
-  WebsiteNullifierPackage,
   WebsiteProof
 } from "./protocol/types.js"

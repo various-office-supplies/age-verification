@@ -24,7 +24,7 @@ import {
   WitnessEqualityMetaStatement,
   Witnesses
 } from "@docknetwork/crypto-wasm-ts"
-import { utf8ToBytes } from "@noble/hashes/utils.js"
+import { randomBytes, utf8ToBytes } from "@noble/hashes/utils.js"
 
 import { domain_hash, from_hex, random_hex, to_hex } from "./crypto.js"
 import type {
@@ -63,13 +63,17 @@ export class InMemoryAccumulatorState {
   }
 }
 
-export async function create_gov_key_material(password: string): Promise<GovKeyMaterial> {
-  await ensure_anonymous_crypto_ready()
+export async function initialize(): Promise<void> {
+  if (!isWasmInitialized()) {
+    await initializeWasm()
+  }
+}
 
+export async function create_gov_key_material(secret_seed: Uint8Array): Promise<GovKeyMaterial> {
   const credential_params = get_credential_params()
   const revocation_params = get_revocation_params()
-  const credential_secret_key = BBSPlusSecretKey.generate(seed("gov-credential-key", password))
-  const revocation_secret_key = AccumulatorSecretKey.generate(seed("gov-revocation-key", password))
+  const credential_secret_key = BBSPlusSecretKey.generate(seed("gov-credential-key", secret_seed))
+  const revocation_secret_key = AccumulatorSecretKey.generate(seed("gov-revocation-key", secret_seed))
   const revocation_state = new InMemoryAccumulatorState()
 
   return {
@@ -88,10 +92,9 @@ export async function create_gov_key_material(password: string): Promise<GovKeyM
   }
 }
 
-export async function create_credential_request(password: string): Promise<CredentialRequest> {
-  await ensure_anonymous_crypto_ready()
-
-  const hidden_messages = new Map([[USER_SECRET_INDEX, create_user_secret(password)]])
+export function create_credential_request(): CredentialRequest {
+  const user_secret = create_user_secret()
+  const hidden_messages = new Map([[USER_SECRET_INDEX, user_secret]])
   const [blinding, request] = BBSPlusBlindSignatureG1.generateRequest(
     hidden_messages,
     get_credential_params(),
@@ -101,7 +104,8 @@ export async function create_credential_request(password: string): Promise<Crede
   return {
     blindedIndices: request.blindedIndices,
     blindingHex: to_hex(blinding),
-    commitmentHex: to_hex(request.commitment)
+    commitmentHex: to_hex(request.commitment),
+    userSecretHex: to_hex(user_secret)
   }
 }
 
@@ -127,7 +131,6 @@ export function create_issued_credential(
 }
 
 export function complete_credential(
-  password: string,
   request: CredentialRequest,
   issued: IssuedCredential
 ): StoredCredential {
@@ -137,7 +140,7 @@ export function complete_credential(
   return {
     credentialIdHex: issued.credentialIdHex,
     signatureHex: signature.hex,
-    userSecretHex: to_hex(create_user_secret(password))
+    userSecretHex: request.userSecretHex
   }
 }
 
@@ -212,14 +215,6 @@ export function verify_website_proof(
   )
 
   return result.verified
-}
-
-export function get_credential_public_key_hex(key_material: GovKeyMaterial): string {
-  return key_material.credentialPublicKey.hex
-}
-
-export function get_revocation_public_key_hex(key_material: GovKeyMaterial): string {
-  return key_material.revocationPublicKey.hex
 }
 
 function create_witnesses(
@@ -337,9 +332,9 @@ function create_credential_messages(credential: StoredCredential): Map<number, U
   ])
 }
 
-function create_user_secret(password: string): Uint8Array {
+function create_user_secret(): Uint8Array {
   return BBSPlusSignatureG1.encodeMessageForSigningConstantTime(
-    domain_hash("user-credential-secret", utf8ToBytes(password))
+    domain_hash("user-credential-secret", randomBytes(32))
   )
 }
 
@@ -415,14 +410,8 @@ function is_number_array(value: unknown): value is number[] {
   return Array.isArray(value) && value.every((item) => typeof item === "number")
 }
 
-function seed(domain: string, password: string): Uint8Array {
-  return domain_hash(domain, utf8ToBytes(password)).slice(0, 32)
-}
-
-async function ensure_anonymous_crypto_ready(): Promise<void> {
-  if (!isWasmInitialized()) {
-    await initializeWasm()
-  }
+function seed(domain: string, secret_seed: Uint8Array): Uint8Array {
+  return domain_hash(domain, secret_seed).slice(0, 32)
 }
 
 type ProofContext = {

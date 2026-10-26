@@ -1,86 +1,50 @@
+import { utf8ToBytes } from "@noble/hashes/utils.js"
+
 import {
   add_invalid_credential_id,
   create_gov_key_material,
   create_invalid_id_accumulator,
   create_issued_credential,
-  create_revocation_witness,
-  get_credential_public_key_hex,
-  get_revocation_public_key_hex
+  create_revocation_witness
 } from "./anonymous-credential.js"
-import {
-  accumulator_with_conversions,
-  encrypt_package,
-  encrypted_csv,
-  encrypted_json,
-  gov_state_to_package,
-  load_encrypted,
-  save_encrypted
-} from "./convert.js"
+import { random_hex } from "./crypto.js"
 import type {
-  ConvertibleInvalidIdAccumulator,
-  EncryptedPackage,
+  GovExport,
   GovPublicKeys,
-  GovStatePackage,
   GovState,
+  InvalidIdAccumulator,
   IssuedCredential,
   PublicCredentialRequest
 } from "./types.js"
 
 export class Gov {
-  private state: GovState
-  private readonly password: string
+  private readonly state: GovState
 
-  private constructor(state: GovState, password: string) {
+  private constructor(state: GovState) {
     this.state = state
-    this.password = password
   }
 
-  static async create(password: string): Promise<Gov> {
-    return new Gov(await Gov.create_state(password), password)
+  // Pass your stored secret on every launch to keep the same keys across restarts.
+  static async create(secret?: string): Promise<Gov> {
+    return new Gov(await Gov.create_state(secret ?? random_hex(32)))
   }
 
-  csv(): string {
-    return encrypted_csv("gov-state", this.password, this.unencrypted_state_package())
+  static async import(data: GovExport): Promise<Gov> {
+    return new Gov(await Gov.create_state(data.secret, data))
   }
 
-  json(): string {
-    return encrypted_json("gov-state", this.password, this.unencrypted_state_package())
-  }
-
-  async load(source: string): Promise<void> {
-    const state_package = await load_encrypted<GovStatePackage>(
-      source,
-      "gov-state",
-      this.password
-    )
-    this.state = await Gov.create_state(this.password, state_package)
-  }
-
-  async save(file_path: string): Promise<void> {
-    await save_encrypted(
-      file_path,
-      "gov-state",
-      this.password,
-      this.unencrypted_state_package()
-    )
-  }
-
-  state_package(): EncryptedPackage {
-    return encrypt_package("gov-state", this.password, this.unencrypted_state_package())
-  }
-
-  unencrypted_state_package(): GovStatePackage {
-    return gov_state_to_package(
-      Array.from(this.state.invalidCredentialIds),
-      this.state.sequence,
-      create_invalid_id_accumulator(this.state.keyMaterial, this.state.sequence)
-    )
+  export(): GovExport {
+    return {
+      invalidCredentialIds: Array.from(this.state.invalidCredentialIds),
+      secret: this.state.secret,
+      sequence: this.state.sequence
+    }
   }
 
   get_public_keys(): GovPublicKeys {
     return {
-      credentialPublicKeyHex: get_credential_public_key_hex(this.state.keyMaterial),
-      revocationPublicKeyHex: get_revocation_public_key_hex(this.state.keyMaterial)
+      credentialPublicKeyHex: this.state.keyMaterial.credentialPublicKey.hex,
+      revocationPublicKeyHex: this.state.keyMaterial.revocationPublicKey.hex
     }
   }
 
@@ -102,19 +66,17 @@ export class Gov {
     return true
   }
 
-  publish_invalid_id_accumulator(): ConvertibleInvalidIdAccumulator {
+  publish_invalid_id_accumulator(): InvalidIdAccumulator {
     this.state.sequence += 1
-    return accumulator_with_conversions(
-      create_invalid_id_accumulator(this.state.keyMaterial, this.state.sequence)
-    )
+    return create_invalid_id_accumulator(this.state.keyMaterial, this.state.sequence)
   }
 
   private static async create_state(
-    password: string,
-    state_package?: GovStatePackage
+    secret: string,
+    data?: GovExport
   ): Promise<GovState> {
-    const key_material = await create_gov_key_material(password)
-    const invalid_credential_ids = new Set(state_package?.invalidCredentialIds ?? [])
+    const key_material = await create_gov_key_material(utf8ToBytes(secret))
+    const invalid_credential_ids = new Set(data?.invalidCredentialIds ?? [])
 
     for (const credential_id_hex of invalid_credential_ids) {
       await add_invalid_credential_id(credential_id_hex, key_material)
@@ -123,7 +85,8 @@ export class Gov {
     return {
       invalidCredentialIds: invalid_credential_ids,
       keyMaterial: key_material,
-      sequence: state_package?.sequence ?? 0
+      secret,
+      sequence: data?.sequence ?? 0
     }
   }
 }

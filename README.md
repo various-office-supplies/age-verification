@@ -1,215 +1,127 @@
 # Anonymous Age Verification
 
-A TypeScript library for anonymous online age verification.
+Prove "I am a verified adult" to any website, without revealing who you are.
 
-Users prove they hold a government-issued private credential without revealing who they are. Websites verify proofs offline using trusted government public key material, their own domain, and an optional invalid-ID accumulator.
+A user holds a government-issued credential and proves it to a website. The website learns
+only a yes/no answer and a per-site pseudonym. It never sees a name, birth date, ID, or face.
 
-## Quick Start
+## Try it
 
 ```bash
 npm install
+
+# Terminal walkthrough
 npm run demo
+
+# Browser demo: all three roles on one page
+npm run demo:web   # then open http://localhost:5173
 ```
 
-## Import
+The browser demo builds `demo/app.js` with esbuild, then serves `demo/` locally. It walks you
+through verifying an ID, getting an anonymous credential, and using it at a fake website — and
+shows that the site learns a unique pseudonym but never your identity. Everything runs in your
+browser; nothing is sent anywhere.
 
-```typescript
-import { Gov, User, Website } from "age-verification"
-```
+## The three roles
 
-## Roles
+| Role | What it does | What it never sees |
+| --- | --- | --- |
+| **Gov** | Issues anonymous credentials, revokes them, publishes an invalid-ID list | — |
+| **User** | Holds a credential and proves it to sites | — |
+| **Website** | Verifies proofs offline and gets a per-site pseudonym | The user's identity |
 
-### Government
+Checking that a person is a real adult (ID + face scan) happens at the **Gov** before this
+library is used. That part is out of scope.
 
-Issues anonymous credentials and publishes an invalid-ID accumulator. It does not publish a valid-user registry.
+## Example
 
-```typescript
-const gov = await Gov.create("your-password")
-const public_keys = gov.get_public_keys()
+```ts
+import { Gov, User, Website, initialize } from "age-verification"
 
-const request = await user.begin_enrollment()
-const issued_credential = gov.issue_credential(request)
-user.complete_enrollment(issued_credential)
+// Load the crypto once at startup. This is the only async step.
+await initialize()
 
-const revocation_witness = await gov.create_revocation_witness(user.get_credential_id())
-user.set_revocation_witness(revocation_witness)
+// Gov creates keys and issues credentials. It never publishes a list of valid users.
+const gov = await Gov.create()
+const govKeys = gov.get_public_keys()
 
-await gov.nullify_credential(credential_id)
-const accumulator = gov.publish_invalid_id_accumulator()
-```
-
-### User
-
-Creates a private wallet from one password, enrolls anonymously, and generates site-specific ZK proofs.
-
-```typescript
-const user = User.create("your-password")
-
-const request = await user.begin_enrollment()
-const issued_credential = gov.issue_credential(request)
-user.complete_enrollment(issued_credential)
-const revocation_witness = await gov.create_revocation_witness(user.get_credential_id())
-user.set_revocation_witness(revocation_witness)
-
-const proof = user.create_proof(accumulator, challenge)
-```
-
-### Website
-
-Creates challenges and verifies proofs locally. It does not need a list of valid users.
-
-```typescript
+// Website trusts the gov credential key, learned out-of-band.
 const site = Website.create({
   siteOrigin: "https://your-site.example",
-  trustedGovPublicKeyHex: public_keys.credentialPublicKeyHex
+  trustedGovPublicKeyHex: govKeys.credentialPublicKeyHex
 })
 
+// User enrolls anonymously. Only the gov knows who they are.
+const user = User.create()
+const request = await user.begin_enrollment()
+user.complete_enrollment(gov.issue_credential(request))
+user.set_revocation_witness(await gov.create_revocation_witness(user.get_credential_id()))
+
+// User proves they are a verified adult. The website fetches the accumulator from gov.
+const accumulator = gov.publish_invalid_id_accumulator()
 const challenge = site.create_challenge()
-const result = await site.verify_proof(challenge, proof, accumulator)
-```
+const proof = user.create_proof(accumulator, challenge)
+const result = site.verify_proof(challenge, proof, accumulator)
 
-Websites do not need to contact the government during verification. They only need:
-
-1. The trusted government credential public key
-2. Their own domain and challenge
-3. The user's proof
-4. The latest invalid-ID accumulator, if revocation checking is required
-
-## How It Works
-
-```text
-User --blind credential request--> Gov
-Gov --anonymous credential--> User
-Gov --invalid-ID accumulator--> Website
-User --site-specific ZK proof--> Website
-Website verifies gov signature, site nullifier, and non-revocation
-```
-
-## Conversion And Storage
-
-Live methods return live objects by default:
-
-```typescript
-const accumulator = gov.publish_invalid_id_accumulator()
-```
-
-Call `.json()` or `.csv()` only when you want text that is ready to save to a file, database, or API response:
-
-```typescript
-const accumulator_json = accumulator.json()
-const accumulator_csv = accumulator.csv()
-```
-
-### Save And Load Files
-
-Gov and User state are encrypted with their passwords. Website nullifiers and public accumulators are plain text.
-
-```typescript
-await gov.save("./gov-state.json")
-await user.save("./user-wallet.json")
-await site.save("./site-nullifiers.csv")
-await accumulator.save("./accumulator.json")
-```
-
-Load them later:
-
-```typescript
-const gov = await Gov.create("gov-password")
-await gov.load("./gov-state.json")
-
-const user = User.create("user-password")
-await user.load("./user-wallet.json")
-
-const site = Website.create({
-  siteOrigin: "https://your-site.example",
-  trustedGovPublicKeyHex: public_keys.credentialPublicKeyHex
-})
-await site.load("./site-nullifiers.csv")
-```
-
-File format is detected from the path:
-
-```text
-.json -> JSON
-.csv  -> CSV
-other -> JSON
-```
-
-### Database Example
-
-Store encrypted Gov/User text in one column:
-
-```typescript
-await db.govState.upsert({
-  id: "main",
-  value: gov.json()
-})
-
-await db.userWallet.upsert({
-  userId: "local-user",
-  value: user.json()
-})
-```
-
-Store website nullifiers as rows:
-
-```typescript
-for (const row of site.csv().split("\n").slice(1)) {
-  const [nullifierHex, siteOrigin] = row.split(",")
-  await db.nullifiers.create({ siteOrigin, nullifierHex })
+if (result.accepted) {
+  result.nullifierHex // a stable, site-specific pseudonym for this person
 }
 ```
 
-### API Example
+## One person per site
 
-Gov can publish a public accumulator:
+The same user always gets the **same pseudonym** at a given site, and a **different one** at
+every other site. This means:
 
-```typescript
-app.get("/invalid-id-accumulator", (_request, response) => {
-  response.type("json").send(gov.publish_invalid_id_accumulator().json())
-})
+- A stolen or reposted credential cannot register a thousand accounts on one site.
+- Two sites cannot compare pseudonyms to link the same person.
+
+The website must store each accepted `nullifierHex` and reject repeats. That is a `UNIQUE`
+constraint in your own database — the library holds no state of its own.
+
+## Revocation
+
+```ts
+await gov.nullify_credential(credentialId)
+const accumulator = gov.publish_invalid_id_accumulator()
 ```
 
-A website can fetch that public object:
+Websites fetch the accumulator from gov and pass it to `verify_proof`. A revoked credential
+fails verification. Users who are not revoked should refresh their witness whenever gov
+publishes a new accumulator.
 
-```typescript
-const accumulator = await fetch("https://gov.example/invalid-id-accumulator")
-  .then((response) => response.json())
+## Secrets and saving state
+
+Pass a secret to `Gov.create` to get the same keys on every launch, so a server restart never
+forces users to re-enroll:
+
+```ts
+const gov = await Gov.create(process.env.GOV_SECRET)
 ```
 
-### Password Warning
+If you omit it, gov generates a random secret, readable from `gov.export()`.
 
-Gov/User save and load require the object password:
+The library never touches files or databases. Export plain objects and store them wherever
+you already keep secrets.
 
-```typescript
-const gov = await Gov.create("gov-password")
-await gov.load("./gov-state.json")
+```ts
+// Save
+const govState = gov.export()   // { secret, invalidCredentialIds, sequence }
+const userState = user.export()
+
+// Restore
+const gov2 = await Gov.import(govState)
+const user2 = User.import(userState)
 ```
 
-If Gov/User state is converted or loaded without a password, the library throws a clear error. Websites do not have passwords because they only store local nullifiers.
-
-### Safe API Defaults
-
-Enrollment and persistence are designed to avoid accidental leaks:
-
-```typescript
-// Safe to send to gov — no blinding secret included
-const request = await user.begin_enrollment()
-
-// Credential stays inside the wallet — no return value
-user.complete_enrollment(issued_credential)
-
-// Encrypted by default for API/DB transfer
-const encrypted_wallet = user.wallet_package()
-const encrypted_state = gov.state_package()
-
-// Explicitly unsafe — only for debugging or custom tooling
-const raw_wallet = user.unencrypted_wallet_package()
-const raw_state = gov.unencrypted_state_package()
-```
+`gov.export()` contains secret key material. Protect it.
 
 ## Notes
 
-This is production-intended demo code, not a finished legal identity system. A qualified crypto research team should review the protocol before real-world use.
+Load the crypto once with `await initialize()` before anything else. After that, enrolling,
+proving, and verifying are all synchronous; only loading a Government's keys or a revocation
+list is async.
 
-Future review: non-crypto privacy leaks like IP address, timing, and browser fingerprinting.
+Demo-grade code, not a finished identity system. Have the protocol reviewed by cryptographers
+before real-world use. Network-level leaks (IP address, timing, cookies) are outside this
+library.
